@@ -14,7 +14,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * Copyright 2011, 2014 Red Hat, Inc.
+ * Copyright 2015 Paul Rawson
  */
 
 /*
@@ -117,34 +117,44 @@ int nmconfig(gchar *username, gchar *password) {
 	while (g_variant_iter_loop (&iter, "{&s@a{sv}}", &key, &value))
 	{
 		if (!g_strcmp0(key, "802-1x")) {
-			ate021x = value;
+			ate021x = g_variant_ref_sink(value);
 		} else {
 			g_variant_builder_add_value(&conBuilder, g_variant_new_dict_entry(g_variant_new_string(key), value));
 		}
 
 	}
 
-
+	GVariantBuilder ate021xSettings;
 	if (ate021x != NULL){
-		g_print ( "This connection is already configured for 802.1x!\n" );
-		return 0;
-	//	g_print("%s\n", g_variant_print(ate021x, FALSE));
+		GVariant *useLogonCreds = NULL;
+		useLogonCreds = g_variant_lookup_value(ate021x, "use-logon-creds", G_VARIANT_TYPE("b"));
+		if (useLogonCreds == NULL || !g_variant_get_boolean(useLogonCreds)) {
+			g_print ( "The primary connection is already configured for 802.1x!\n" );
+			return 1;
+		} else {
+			g_print("Using logon credentials...\n");
+			g_variant_iter_init( &iter, ate021x );
+			while(g_variant_iter_loop (&iter, "{&s@v}", &key, &value)){
+				if (key != "identity" && key != "password")
+					g_variant_builder_add(&ate021xSettings, key, value);
+			}
+		}
 	} else {
-		GVariantBuilder ate021xSettings;
-		g_print("No existing 802.1x settings.\n");
+		// Try a common EAP setup
 		g_variant_builder_init(&ate021xSettings, G_VARIANT_TYPE("a{sv}"));
 		GVariantBuilder peaptypesbuilder;
 		g_variant_builder_init(&peaptypesbuilder, G_VARIANT_TYPE("as"));
 		g_variant_builder_add(&peaptypesbuilder, "s", "peap");
 		GVariant *peaptypes = g_variant_builder_end(&peaptypesbuilder);
 		g_variant_builder_add(&ate021xSettings, "{sv}", "eap", peaptypes);
-		g_variant_builder_add(&ate021xSettings, "{sv}", "identity", g_variant_new_string(username));
-		g_variant_builder_add(&ate021xSettings, "{sv}", "password", g_variant_new_string(password));
 		g_variant_builder_add(&ate021xSettings, "{sv}", "system-ca-certs", g_variant_new_boolean(TRUE));
 		g_variant_builder_add(&ate021xSettings, "{sv}", "phase2-auth", g_variant_new_string("mschapv2"));
-		ate021x = g_variant_builder_end(&ate021xSettings);
-		g_variant_builder_add_value(&conBuilder, g_variant_new_dict_entry(g_variant_new_string("802-1x"), ate021x));
 	}
+	g_variant_builder_add(&ate021xSettings, "{sv}", "identity", g_variant_new_string(username));
+	g_variant_builder_add(&ate021xSettings, "{sv}", "password", g_variant_new_string(password));
+	ate021x = g_variant_builder_end(&ate021xSettings);
+	g_variant_builder_add_value(&conBuilder, g_variant_new_dict_entry(g_variant_new_string("802-1x"), ate021x));
+
 	editedConnection = g_variant_builder_end(&conBuilder);
 
 
@@ -162,11 +172,25 @@ int nmconfig(gchar *username, gchar *password) {
 		g_print ("Settings failed to apply!\nError: %s\n", err->message);
 	} else {
 		g_print ("Settings applied successfully!\n");
-/*	        ret = g_dbus_proxy_call_sync(nm_proxy,
-        	                        "ActivateConnection", PrimaryConnectionPath,
-                	                G_DBUS_CALL_FLAGS_NONE,
-                        	        -1, NULL, NULL);
-*/
+
+		GVariant *devices = g_dbus_proxy_get_cached_property(nm_active_proxy, "Devices");
+		gchar *device;
+		g_variant_iter_init(&iter, devices);
+		while (g_variant_iter_loop(&iter, "&o", &device)) {
+			GVariantBuilder activateConnectionBuilder;
+			g_variant_builder_init( &activateConnectionBuilder, G_VARIANT_TYPE("(ooo)"));
+			g_variant_builder_add_value(&activateConnectionBuilder, PrimaryConnectionSettingsPath);
+			g_variant_builder_add_value(&activateConnectionBuilder, g_variant_new_object_path(device));
+			g_variant_builder_add_value(&activateConnectionBuilder, g_variant_new_object_path("/"));
+
+			GVariant *activateConnection = g_variant_builder_end(&activateConnectionBuilder);
+
+		        ret = g_dbus_proxy_call_sync(nm_proxy,
+        		                        "ActivateConnection", activateConnection,
+        	        	                G_DBUS_CALL_FLAGS_NONE,
+                        		        -1, NULL, NULL);
+		}
+
 	}
 
 	return 0;
