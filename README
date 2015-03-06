@@ -1,0 +1,10 @@
+Options:
+eap_method: [peap,eap,md5,...]
+ca_cert_path: /path/to/nonsystem/cert.crt
+inner_method: [peap,eap,md5,...]
+connection_name: [enp0s3,auto,...]
+
+Note: These settings will be ignored if NetworkManager is already configured for 802.1x
+
+Example:
+password pam_8021x.so eap_method=peap ca_cert_path=/path/to/nonsystem/cert.crt inner_method=mschapv2 connection_name=enp0s3
